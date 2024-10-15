@@ -15,9 +15,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.dtmcli.java.sample.controller.TransBarrierController;
 import com.dtmcli.java.sample.param.TransNotifyReq;
 import com.dtmcli.java.sample.param.TransReq;
 
@@ -28,7 +28,6 @@ import pub.dtm.client.barrier.BranchBarrier;
 import pub.dtm.client.constant.Constants;
 import pub.dtm.client.exception.FailureException;
 import pub.dtm.client.model.responses.DtmResponse;
-import pub.dtm.client.tcc.Tcc;
 import pub.dtm.client.utils.JsonUtils;
 
 @Slf4j
@@ -37,7 +36,8 @@ import pub.dtm.client.utils.JsonUtils;
 public class TccPMeasureByDtmController {
 
 	private static AtomicInteger userIdIndex = new AtomicInteger(1);
-	private static final String svc = "http://localhost:8081/pmeasure/byDtm";
+	private static final String svc = "http://192.168.10.42:8081/pmeasure/byDtm";
+//	private static final String svc = "http://127.0.0.1:8081/pmeasure/byDtm";
 
 	@Value("${dtm.ipport}")
 	private String endpoint;
@@ -50,13 +50,46 @@ public class TccPMeasureByDtmController {
 	 * @return
 	 */
 	@RequestMapping("tccBarrier")
-	public String tccBarrier() {
+	public String tccBarrier(@RequestParam(required = false, defaultValue = "true") boolean notify) {
 		// 创建dmt client
 		DtmClient dtmClient = new DtmClient(endpoint);
 		// 创建tcc事务
 		String customGid = UUID.randomUUID().toString();
 		try {
-			dtmClient.tccGlobalTransaction(customGid, TccPMeasureByDtmController::tccBarrierTrans);
+			dtmClient.tccGlobalTransaction(
+					customGid, 
+					tcc -> {
+						int amount = 30;
+						int transOutUserId = userIdIndex.getAndAdd(2);
+						transOutUserId = transOutUserId >= 1000 ? transOutUserId % 1000: transOutUserId;
+						LocalDateTime transTime = LocalDateTime.now();
+						// 用户1 转出30元
+						try (Response outResponse = tcc.callBranch(
+								new TransReq(transOutUserId, -amount),
+								svc + "/barrierTransOutTry",
+								svc + "/barrierTransOutConfirm",
+								svc + "/barrierTransOutCancel")) {
+							log.info("outResponse:{}", outResponse);
+						}
+						// 用户2 转入30元
+						int transInUserId = transOutUserId + 1;
+						try (Response inResponse = tcc.callBranch(
+								new TransReq(transInUserId, amount), 
+								svc + "/barrierTransInTry",
+								svc + "/barrierTransInConfirm",
+								svc + "/barrierTransInCancel")) {
+							log.info("inResponse:{}", inResponse);
+						}
+						if (notify) {
+							// 用户1/2 提交短信通知任务
+							try (Response callBranch = tcc.callBranch(
+									new TransNotifyReq(tcc.getGid(), transOutUserId, transInUserId, amount, transTime.toString()), 
+									svc + "/barrierTransNotifyTry",
+									svc + "/barrierTransNotifyConfirm",
+									svc + "/barrierTransCancelCancel")) {
+							};
+						}
+					});
 		} catch (Exception e) {
 			log.error("tccGlobalTransaction error", e);
 			return "fail";
@@ -64,43 +97,6 @@ public class TccPMeasureByDtmController {
 		return "success";
 	}
 
-	/**
-	 *
-	 * @param tcc
-	 * @return
-	 * @see TransBarrierController
-	 */
-	public static void tccBarrierTrans(Tcc tcc) throws Exception {
-		int amount = 30;
-		int transOutUserId = userIdIndex.getAndAdd(2);
-		transOutUserId = transOutUserId >= 1000 ? transOutUserId % 1000: transOutUserId;
-		LocalDateTime transTime = LocalDateTime.now();
-		// 用户1 转出30元
-		try (Response outResponse = tcc.callBranch(
-				new TransReq(transOutUserId, -amount),
-				svc + "/barrierTransOutTry",
-				svc + "/barrierTransOutConfirm",
-				svc + "/barrierTransOutCancel")) {
-			log.info("outResponse:{}", outResponse);
-		}
-		// 用户2 转入30元
-		int transInUserId = transOutUserId + 1;
-		try (Response inResponse = tcc.callBranch(
-				new TransReq(transInUserId, amount), 
-				svc + "/barrierTransInTry",
-				svc + "/barrierTransInConfirm",
-				svc + "/barrierTransInCancel")) {
-			log.info("inResponse:{}", inResponse);
-		}
-		// 用户1/2 提交短信通知任务
-		try (Response callBranch = tcc.callBranch(
-				new TransNotifyReq(tcc.getGid(), transOutUserId, transInUserId, amount, transTime.toString()), 
-				svc + "/barrierTransNotifyTry",
-				svc + "/barrierTransNotifyConfirm",
-				svc + "/barrierTransCancelCancel")) {
-		};
-	}
-	
     // ---------------- 转出阶段 ----------------
 	@RequestMapping("barrierTransOutTry")
     public Object TransOutTry(HttpServletRequest request) throws Exception {

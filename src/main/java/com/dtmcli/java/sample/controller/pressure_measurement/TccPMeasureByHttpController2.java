@@ -56,7 +56,7 @@ public class TccPMeasureByHttpController2 {
 		
 		try (Response post = HttpUtils.post(svc + "/barrierTransOut", transOutJson)) {};
 		try (Response post = HttpUtils.post(svc + "/barrierTransIn", transInJson)) {};
-		try (Response post = HttpUtils.post(svc + "/barrierTransNotify", transNotifyJson)) {};
+//		try (Response post = HttpUtils.post(svc + "/barrierTransNotify", transNotifyJson)) {};
 		return "success";
 	}
 
